@@ -3,35 +3,21 @@ import { cn } from "@/lib/utils";
 import { checkSerial, type Denomination, type ScanResult } from "@/data/invalid-ranges";
 
 // ─── Worker cache a nivel de módulo ────────────────────────────────────────────
-// Se crea UNA SOLA VEZ por sesión del navegador. No se destruye entre aperturas
-// del modal para no tener que re-descargar el modelo (~10 MB) cada vez.
+// Se crea UNA SOLA VEZ por sesión. Re-abriendo el modal no re-descarga nada.
 type TWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
 
 let _workerPromise: Promise<TWorker> | null = null;
 
-async function buildWorker(local: boolean): Promise<TWorker> {
-  const { createWorker } = await import("tesseract.js");
-  const opts = local
-    ? {
-        // Archivos servidos desde nuestro propio dominio (public/tessdata/)
-        // — funciona con señal baja o sin acceso al CDN externo.
-        langPath: "/tessdata",
-        workerPath: "/tessdata/worker.min.js",
-        corePath: "/tessdata/tesseract-core-simd-lstm.wasm.js",
-      }
-    : {}; // fallback: usa CDN por defecto
-  const worker = await createWorker("eng", 1, opts);
-  await worker.setParameters({ tessedit_char_whitelist: "0123456789" });
-  return worker;
-}
-
 function getWorker(): Promise<TWorker> {
   if (!_workerPromise) {
-    _workerPromise = buildWorker(true).catch(() => {
-      // Si los archivos locales no están disponibles, usa CDN como respaldo
-      _workerPromise = null;
-      return buildWorker(false);
-    });
+    _workerPromise = (async () => {
+      const { createWorker } = await import("tesseract.js");
+      const worker = await createWorker("eng");
+      await worker.setParameters({ tessedit_char_whitelist: "0123456789" });
+      return worker;
+    })();
+    // Si falla, limpiar para que el próximo intento reintente
+    _workerPromise.catch(() => { _workerPromise = null; });
   }
   return _workerPromise;
 }
@@ -57,6 +43,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
   const [cameraReady, setCameraReady] = useState(false);
   const [workerReady, setWorkerReady] = useState(false);
+  const [workerError, setWorkerError] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [scanResult, setScanResult] = useState<ScanResult>({
     serialNumber: null,
@@ -93,21 +80,22 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
     scanActiveRef.current = false;
     setCameraError("");
+    setWorkerError(false);
     setScanResult({ serialNumber: null, status: "scanning" });
     setWorkerReady(false);
 
     startCamera();
 
     // Pre-carga (o reutiliza) el worker mientras la cámara arranca
+    let cancelled = false;
     getWorker()
-      .then(() => setWorkerReady(true))
-      .catch(() => {
-        // Último recurso: forzar recarga
-        _workerPromise = null;
-        getWorker().then(() => setWorkerReady(true));
-      });
+      .then(() => { if (!cancelled) setWorkerReady(true); })
+      .catch(() => { if (!cancelled) setWorkerError(true); });
 
-    return () => stopCamera();
+    return () => {
+      cancelled = true;
+      stopCamera();
+    };
   }, [isOpen, startCamera, stopCamera]);
 
   // Bucle de escaneo — arranca cuando CÁMARA y WORKER están listos
@@ -183,13 +171,13 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
   if (!isOpen) return null;
 
   const { serialNumber, status } = scanResult;
-  const isLoading = !cameraReady || !workerReady;
+  const isLoading = !cameraReady || (!workerReady && !workerError);
 
   const loadingLabel = !cameraReady && !workerReady
     ? "Iniciando cámara y motor OCR…"
     : !cameraReady
     ? "Iniciando cámara…"
-    : "Cargando motor de reconocimiento…";
+    : "Cargando motor de reconocimiento… (requiere internet la primera vez)";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
@@ -251,16 +239,43 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
           )}
 
           {/* Pantalla de carga */}
-          {isLoading && !cameraError && (
+          {isLoading && !cameraError && !workerError && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/65">
               <div className="flex flex-col items-center gap-3 px-6 text-center">
                 <div className="h-9 w-9 animate-spin rounded-full border-4 border-white/30 border-t-white" />
                 <span className="text-sm text-white">{loadingLabel}</span>
                 {!workerReady && cameraReady && (
                   <span className="text-xs text-white/60">
-                    Primera vez: descargando motor OCR (~10 MB)
+                    Primera vez: descargando motor OCR (~4 MB)
                   </span>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Error de carga del worker */}
+          {workerError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/75">
+              <div className="flex flex-col items-center gap-4 px-6 text-center">
+                <span className="text-3xl">📶</span>
+                <p className="text-sm font-medium text-white">
+                  No se pudo cargar el motor OCR.
+                </p>
+                <p className="text-xs text-white/60">
+                  Verificá tu conexión a internet e intentá de nuevo.
+                </p>
+                <button
+                  onClick={() => {
+                    setWorkerError(false);
+                    setWorkerReady(false);
+                    getWorker()
+                      .then(() => setWorkerReady(true))
+                      .catch(() => setWorkerError(true));
+                  }}
+                  className="rounded-xl bg-white px-6 py-2.5 text-sm font-semibold text-gray-900 transition-opacity hover:opacity-90 active:scale-95"
+                >
+                  Reintentar
+                </button>
               </div>
             </div>
           )}
