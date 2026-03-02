@@ -67,22 +67,32 @@ export interface ScanResult {
   status: ScanStatus;
 }
 
-/** Extrae el número de serie del texto OCR y valida contra los rangos invalidados */
+/** Extrae el número de serie del texto OCR y valida contra los rangos invalidados.
+ *
+ *  Usa ventana deslizante de 7-10 dígitos para manejar el caso frecuente en que
+ *  la letra "B" (Serie B) sea leída como "8" por el OCR:
+ *    → "12345678 B" se vuelve "123456788" con el whitelist de solo dígitos
+ *    → la ventana de 8 dígitos encuentra "12345678" dentro de "123456788" ✓
+ */
 export function checkSerial(rawText: string, denomination: Denomination): ScanResult {
-  // Busca secuencias de 7-10 dígitos (el número de serie de los billetes bolivianos)
-  const matches = rawText.replace(/\s+/g, "").match(/\d{7,10}/g);
-  if (!matches) return { serialNumber: null, status: "unclear" };
+  const digits = rawText.replace(/\D/g, "");
+  if (digits.length < 7) return { serialNumber: null, status: "unclear" };
 
-  // Toma la coincidencia más larga
-  const serialStr = matches.sort((a, b) => b.length - a.length)[0];
-  const serial = parseInt(serialStr, 10);
+  const ranges = INVALID_RANGES[denomination];
 
-  const isInvalid = INVALID_RANGES[denomination].some(
-    (r) => serial >= r.from && serial <= r.to
-  );
+  // Prioriza longitudes 8 y 9 (rangos reales de billetes bolivianos), luego 7 y 10
+  for (const len of [8, 9, 7, 10]) {
+    if (digits.length < len) continue;
+    for (let i = 0; i <= digits.length - len; i++) {
+      const num = parseInt(digits.substring(i, i + len), 10);
+      if (ranges.some((r) => num >= r.from && num <= r.to)) {
+        return { serialNumber: digits.substring(i, i + len), status: "invalid" };
+      }
+    }
+  }
 
-  return {
-    serialNumber: serialStr,
-    status: isInvalid ? "invalid" : "valid",
-  };
+  // Ningún candidato cayó en rango inválido — mostrar el número central de 8 dígitos
+  const center = Math.max(0, Math.floor((digits.length - 8) / 2));
+  const serialStr = digits.substring(center, center + Math.min(8, digits.length));
+  return { serialNumber: serialStr, status: serialStr.length >= 7 ? "valid" : "unclear" };
 }

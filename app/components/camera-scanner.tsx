@@ -4,19 +4,40 @@ import { checkSerial, type Denomination, type ScanResult } from "@/data/invalid-
 
 // ─── Worker cache a nivel de módulo ────────────────────────────────────────────
 // Se crea UNA SOLA VEZ por sesión. Re-abriendo el modal no re-descarga nada.
+import type { PSM } from "tesseract.js";
 type TWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
 
 let _workerPromise: Promise<TWorker> | null = null;
 
+async function createTesseractWorker(): Promise<TWorker> {
+  const { createWorker } = await import("tesseract.js");
+  try {
+    // Intenta cargar desde el propio dominio (public/tessdata/)
+    // — NO requiere CDN externo, funciona con señal baja
+    const worker = await createWorker("eng", 1, {
+      workerPath: "/tessdata/worker.min.js",
+      langPath: "/tessdata",
+      corePath: "/tessdata",
+    });
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: "7" as PSM, // PSM_SINGLE_LINE — trata la imagen como una sola línea de texto
+    });
+    return worker;
+  } catch {
+    // Fallback al CDN si los archivos locales no están disponibles
+    const worker = await createWorker("eng");
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: "7" as PSM,
+    });
+    return worker;
+  }
+}
+
 function getWorker(): Promise<TWorker> {
   if (!_workerPromise) {
-    _workerPromise = (async () => {
-      const { createWorker } = await import("tesseract.js");
-      const worker = await createWorker("eng");
-      await worker.setParameters({ tessedit_char_whitelist: "0123456789" });
-      return worker;
-    })();
-    // Si falla, limpiar para que el próximo intento reintente
+    _workerPromise = createTesseractWorker();
     _workerPromise.catch(() => { _workerPromise = null; });
   }
   return _workerPromise;
@@ -62,8 +83,23 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
       });
+      // Solicitar enfoque continuo si el dispositivo lo soporta
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        try {
+          await track.applyConstraints({
+            advanced: [{ focusMode: "continuous" } as MediaTrackConstraintSet],
+          });
+        } catch {
+          // focusMode no soportado en este dispositivo — continuar igual
+        }
+      }
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
     } catch {
@@ -138,12 +174,23 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
         ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
 
-        // Escala de grises + umbralización para mejorar contraste
+        // Escala de grises + estiramiento de contraste (min-max stretch)
+        // Mejor que el umbral fijo: Tesseract aplica su propio umbral internamente
+        // y este preproceso amplifica la diferencia entre tinta y papel sin
+        // destruir información en condiciones de poca luz.
         const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const d = img.data;
+        const grays = new Float32Array(d.length / 4);
+        let minG = 255, maxG = 0;
         for (let i = 0; i < d.length; i += 4) {
-          const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          const val = gray > 128 ? 255 : 0;
+          const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          grays[i >> 2] = g;
+          if (g < minG) minG = g;
+          if (g > maxG) maxG = g;
+        }
+        const span = maxG - minG || 1;
+        for (let i = 0; i < d.length; i += 4) {
+          const val = Math.round(((grays[i >> 2] - minG) / span) * 255);
           d[i] = d[i + 1] = d[i + 2] = val;
         }
         ctx.putImageData(img, 0, 0);
@@ -190,7 +237,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
               Verificar {BILL_LABEL[denomination]}
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Apuntá la cámara al número de serie del billete
+              Acercá el número de serie hasta que llene el recuadro
             </p>
           </div>
           <button
