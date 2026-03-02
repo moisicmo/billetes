@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "react-router build",
+    "copy-tessdata": "node -e \"const fs=require('fs');const p='public/tessdata';fs.mkdirSync(p,{recursive:true});['worker.min.js'].forEach(f=>fs.copyFileSync('node_modules/tesseract.js/dist/'+f,p+'/'+f));['tesseract-core-simd-lstm.wasm.js','tesseract-core-simd-lstm.wasm'].forEach(f=>fs.copyFileSync('node_modules/tesseract.js-core/'+f,p+'/'+f));console.log('tessdata copied')\"",
+    "build": "npm run copy-tessdata && react-router build",
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc"
