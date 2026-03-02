@@ -3,10 +3,109 @@ import type { Route } from "./+types/home";
 import { CameraScanner } from "@/components/camera-scanner";
 import type { Denomination } from "@/data/invalid-ranges";
 
+const SITE_TITLE = "Verificador de Billetes Serie B — BCB Bolivia";
+const SITE_DESC =
+  "Verificá si tu billete de Bs10, Bs20 o Bs50 de la Serie B está en los rangos invalidados por el Banco Central de Bolivia tras el siniestro aéreo del 27 de febrero de 2026 en El Alto. Escaneo con cámara y OCR en tiempo real.";
+
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Verificador de Billetes — BCB Bolivia" },
-    { name: "description", content: "Verificá si un billete de la Serie B está en los rangos invalidados por el BCB tras el siniestro del 27 feb 2026." },
+    { title: SITE_TITLE },
+
+    // Básico
+    { name: "description", content: SITE_DESC },
+    { name: "keywords", content: "billetes invalidados, serie B, BCB, Banco Central Bolivia, verificar billete, billetes robados, avión FAB El Alto, Bs10, Bs20, Bs50, número de serie, billete válido, billete inválido, siniestro aéreo 2026" },
+    { name: "robots", content: "index, follow" },
+    { name: "author", content: "Verificador BCB Bolivia" },
+    { name: "language", content: "Spanish" },
+
+    // Open Graph — Google, Facebook, WhatsApp, ChatGPT search
+    { property: "og:type", content: "website" },
+    { property: "og:site_name", content: "Verificador Billetes Serie B" },
+    { property: "og:title", content: SITE_TITLE },
+    { property: "og:description", content: SITE_DESC },
+    { property: "og:locale", content: "es_BO" },
+
+    // Twitter / X
+    { name: "twitter:card", content: "summary" },
+    { name: "twitter:title", content: SITE_TITLE },
+    { name: "twitter:description", content: SITE_DESC },
+
+    // JSON-LD — datos estructurados para Google y rastreadores de IA
+    {
+      "script:ld+json": {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        name: "Verificador de Billetes Serie B Bolivia",
+        description: SITE_DESC,
+        applicationCategory: "UtilityApplication",
+        operatingSystem: "Web",
+        inLanguage: "es-BO",
+        isAccessibleForFree: true,
+        about: {
+          "@type": "Event",
+          name: "Siniestro aéreo FAB El Alto — 27 febrero 2026",
+          description:
+            "Un avión de la Fuerza Aérea Boliviana sufrió un accidente en El Alto transportando billetes de la Nueva Familia de Bolivianos Serie B. El Banco Central de Bolivia (BCB) invalidó los rangos de números de serie sustraídos en los cortes de Bs10, Bs20 y Bs50.",
+          startDate: "2026-02-27",
+          location: {
+            "@type": "Place",
+            name: "El Alto, Bolivia",
+          },
+        },
+        featureList: [
+          "Escaneo de número de serie con cámara y OCR",
+          "Verificación de billetes Bs10, Bs20 y Bs50 Serie B",
+          "Rangos oficiales del BCB — Comunicado CP8/2026",
+        ],
+        provider: {
+          "@type": "Organization",
+          name: "Banco Central de Bolivia",
+          url: "https://www.bcb.gob.bo",
+        },
+      },
+    },
+
+    // FAQPage — ayuda a que Google y ChatGPT muestren respuestas directas
+    {
+      "script:ld+json": {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        mainEntity: [
+          {
+            "@type": "Question",
+            name: "¿Cómo sé si mi billete de la Serie B es inválido?",
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: "Ingresá a este verificador, seleccioná el valor del billete (Bs10, Bs20 o Bs50) y apuntá la cámara al número de serie. La herramienta compara el número contra los rangos invalidados por el BCB en el Comunicado CP8/2026. También podés verificar en el sitio oficial: bcb.gob.bo.",
+            },
+          },
+          {
+            "@type": "Question",
+            name: "¿Qué billetes de la Serie B quedaron invalidados?",
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: "Los billetes de Bs10, Bs20 y Bs50 de la Serie B de la Nueva Familia de Bolivianos con números de serie comprendidos en los rangos publicados por el BCB (Comunicado CP8/2026 del 28 de febrero de 2026) quedaron sin valor legal. El resto de la Serie B es válido desde el 2 de marzo de 2026.",
+            },
+          },
+          {
+            "@type": "Question",
+            name: "¿Por qué se invalidaron los billetes de la Serie B?",
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: "El 27 de febrero de 2026, un avión de la Fuerza Aérea Boliviana (FAB) sufrió un siniestro en El Alto mientras transportaba 17.1 millones de billetes nuevos de la Serie B. Se estima que el 30% fue sustraído ilegalmente. El BCB publicó los rangos de series robadas para proteger al sistema financiero.",
+            },
+          },
+          {
+            "@type": "Question",
+            name: "¿Dónde puedo verificar oficialmente un billete Serie B?",
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: "El Banco Central de Bolivia habilitó un verificador oficial en: https://www.bcb.gob.bo/?q=content/verificador-de-numero-de-serie",
+            },
+          },
+        ],
+      },
+    },
   ];
 }
 
