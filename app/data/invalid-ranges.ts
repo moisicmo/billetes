@@ -106,8 +106,12 @@ export function checkSerial(rawText: string, denomination: Denomination): ScanRe
 
   if (groups.length === 0) return { serialNumber: null, status: "unclear" };
 
-  // Normalizar a 9 dígitos: si tiene 10, descartar el último (probable "B" leído como "8")
-  const digits = groups[0].length === 10 ? groups[0].slice(0, 9) : groups[0];
+  // Normalizar a 9 dígitos:
+  // - 10 dígitos: descartar el último (probable "B" leído como "8")
+  // - 8 dígitos: rellenar con "0" a la izquierda (cero inicial perdido por OCR)
+  // padStart no afecta el valor numérico, solo el display
+  const raw = groups[0].length === 10 ? groups[0].slice(0, 9) : groups[0];
+  const digits = raw.padStart(9, "0");
   const num = parseInt(digits, 10);
   return {
     serialNumber: digits,
