@@ -67,48 +67,50 @@ export interface ScanResult {
   status: ScanStatus;
 }
 
-/** Extrae el número de serie del texto OCR y valida contra los rangos invalidados.
+/**
+ * El número de serie boliviano siempre tiene formato: 9 dígitos + letra (A, B, u otra).
+ * Puede empezar con ceros: "001234567 B".
  *
- *  IMPORTANTE: NO concatenar todos los dígitos del rawText antes de buscar.
- *  PSM 11 lee texto disperso de todo el billete ("901", "1986", "20", etc.).
- *  Concatenarlos crea cadenas largas con falsos positivos por ventana deslizante.
- *  En cambio, cada grupo de dígitos separado por letras/espacios se evalúa
- *  de forma INDEPENDIENTE — solo el grupo más largo (≥7 dígitos) se considera
- *  candidato a número de serie.
+ * Regla:
+ *  - Letra ≠ "B"  →  Serie A u otra  →  siempre VÁLIDO
+ *  - Letra = "B"  →  Serie B         →  evaluar los 9 dígitos contra rangos BCB
+ *  - Sin letra legible → buscar el mejor grupo de 8-10 dígitos y evaluar igual
+ *    (10 dígitos: el último probablemente es "B" leído como "8" por OCR)
  */
 export function checkSerial(rawText: string, denomination: Denomination): ScanResult {
   const upper = rawText.toUpperCase();
   const ranges = INVALID_RANGES[denomination];
 
-  // ── 1. Detectar Serie A: "XXXXXXXX A" → siempre VÁLIDO ─────────────────────
-  // La "A" puede estar pegada o separada; no exigir fin de cadena (puede haber
-  // más texto OCR a continuación, ej: "282999724A901").
-  const serieAMatch = upper.match(/(\d{7,10})\s{0,3}A(?![0-9A-Z])/);
-  if (serieAMatch) {
-    return { serialNumber: serieAMatch[1].slice(-8), status: "valid" };
+  // ── Caso 1: OCR leyó la letra correctamente ─────────────────────────────────
+  // Patrón: exactamente 9 dígitos (con posibles ceros al inicio), espacio opcional, letra
+  const fullMatch = upper.match(/(\d{9})\s{0,3}([A-Z])(?![0-9A-Z])/);
+  if (fullMatch) {
+    const digits = fullMatch[1];
+    const letter = fullMatch[2];
+    // Cualquier letra distinta de B → válido de inmediato (Serie A u otra)
+    if (letter !== "B") return { serialNumber: digits, status: "valid" };
+    // Serie B → comparar contra rangos BCB
+    const num = parseInt(digits, 10);
+    return {
+      serialNumber: digits,
+      status: ranges.some((r) => num >= r.from && num <= r.to) ? "invalid" : "valid",
+    };
   }
 
-  // ── 2. Extraer grupos de dígitos individuales (sin mezclar grupos) ──────────
-  // "LEY 901 DEL 28 1986" → ["901","28","1986"] → ninguno ≥7 dígitos → ignorados
-  // "087280145 B"         → ["087280145"] → 9 dígitos → se evalúa
-  const groups = (upper.match(/\d+/g) ?? []).filter(g => g.length >= 7);
+  // ── Caso 2: OCR no capturó la letra → buscar grupo de 8-10 dígitos ─────────
+  // Se ignoran grupos < 8 (ej: "901", "28", "1986" del texto impreso en el billete).
+  // Se prioriza longitud 9; si hay 10, el último dígito es probablemente "B"→"8".
+  const groups = (upper.match(/\d+/g) ?? [])
+    .filter((g) => g.length >= 8 && g.length <= 10)
+    .sort((a, b) => Math.abs(a.length - 9) - Math.abs(b.length - 9)); // más cercano a 9 primero
 
   if (groups.length === 0) return { serialNumber: null, status: "unclear" };
 
-  // Tomar el grupo más largo como candidato al número de serie
-  const best = groups.sort((a, b) => b.length - a.length)[0];
-
-  // ── 3. Ventana deslizante SOLO sobre el grupo principal ─────────────────────
-  for (const len of [8, 9]) {
-    if (best.length < len) continue;
-    for (let i = 0; i <= best.length - len; i++) {
-      const candidate = best.substring(i, i + len);
-      const num = parseInt(candidate, 10);
-      if (ranges.some((r) => num >= r.from && num <= r.to)) {
-        return { serialNumber: candidate, status: "invalid" };
-      }
-    }
-  }
-
-  return { serialNumber: best.slice(-8), status: "valid" };
+  // Normalizar a 9 dígitos: si tiene 10, descartar el último (probable "B" leído como "8")
+  const digits = groups[0].length === 10 ? groups[0].slice(0, 9) : groups[0];
+  const num = parseInt(digits, 10);
+  return {
+    serialNumber: digits,
+    status: ranges.some((r) => num >= r.from && num <= r.to) ? "invalid" : "valid",
+  };
 }
