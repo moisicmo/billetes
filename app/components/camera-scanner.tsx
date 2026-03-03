@@ -30,7 +30,7 @@ async function createTesseractWorker(): Promise<TWorker> {
   });
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789AB", // A y B para distinguir Serie A vs Serie B
-    tessedit_pageseg_mode: "7" as PSM,       // PSM_SINGLE_LINE: una sola línea de texto
+    tessedit_pageseg_mode: "11" as PSM,      // PSM_SPARSE_TEXT: encuentra texto en cualquier posición del frame
   });
   return worker;
 }
