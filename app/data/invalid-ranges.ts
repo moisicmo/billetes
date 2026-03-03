@@ -69,39 +69,46 @@ export interface ScanResult {
 
 /** Extrae el número de serie del texto OCR y valida contra los rangos invalidados.
  *
- *  - Si detecta la letra "A" después de los dígitos → Serie A → siempre VÁLIDO
- *    (el BCB solo invalidó billetes Serie B)
- *  - Si detecta "B" o no hay letra → Serie B → verificar contra rangos
- *  - Ventana deslizante 7-10 dígitos para manejar casos en que "B" se lea como "8"
+ *  IMPORTANTE: NO concatenar todos los dígitos del rawText antes de buscar.
+ *  PSM 11 lee texto disperso de todo el billete ("901", "1986", "20", etc.).
+ *  Concatenarlos crea cadenas largas con falsos positivos por ventana deslizante.
+ *  En cambio, cada grupo de dígitos separado por letras/espacios se evalúa
+ *  de forma INDEPENDIENTE — solo el grupo más largo (≥7 dígitos) se considera
+ *  candidato a número de serie.
  */
 export function checkSerial(rawText: string, denomination: Denomination): ScanResult {
   const upper = rawText.toUpperCase();
-
-  // Detectar Serie A: secuencia de dígitos seguida de " A" o "A" al final
-  const serieAMatch = upper.match(/(\d{7,10})\s*A(?:\s|$)/);
-  if (serieAMatch) {
-    const serial = serieAMatch[1].slice(-8);
-    return { serialNumber: serial, status: "valid" };
-  }
-
-  const digits = upper.replace(/\D/g, "");
-  if (digits.length < 7) return { serialNumber: null, status: "unclear" };
-
   const ranges = INVALID_RANGES[denomination];
 
-  // Prioriza longitudes 8 y 9 (rangos reales de billetes bolivianos), luego 7 y 10
-  for (const len of [8, 9, 7, 10]) {
-    if (digits.length < len) continue;
-    for (let i = 0; i <= digits.length - len; i++) {
-      const num = parseInt(digits.substring(i, i + len), 10);
+  // ── 1. Detectar Serie A: "XXXXXXXX A" → siempre VÁLIDO ─────────────────────
+  // La "A" puede estar pegada o separada; no exigir fin de cadena (puede haber
+  // más texto OCR a continuación, ej: "282999724A901").
+  const serieAMatch = upper.match(/(\d{7,10})\s{0,3}A(?![0-9A-Z])/);
+  if (serieAMatch) {
+    return { serialNumber: serieAMatch[1].slice(-8), status: "valid" };
+  }
+
+  // ── 2. Extraer grupos de dígitos individuales (sin mezclar grupos) ──────────
+  // "LEY 901 DEL 28 1986" → ["901","28","1986"] → ninguno ≥7 dígitos → ignorados
+  // "087280145 B"         → ["087280145"] → 9 dígitos → se evalúa
+  const groups = (upper.match(/\d+/g) ?? []).filter(g => g.length >= 7);
+
+  if (groups.length === 0) return { serialNumber: null, status: "unclear" };
+
+  // Tomar el grupo más largo como candidato al número de serie
+  const best = groups.sort((a, b) => b.length - a.length)[0];
+
+  // ── 3. Ventana deslizante SOLO sobre el grupo principal ─────────────────────
+  for (const len of [8, 9]) {
+    if (best.length < len) continue;
+    for (let i = 0; i <= best.length - len; i++) {
+      const candidate = best.substring(i, i + len);
+      const num = parseInt(candidate, 10);
       if (ranges.some((r) => num >= r.from && num <= r.to)) {
-        return { serialNumber: digits.substring(i, i + len), status: "invalid" };
+        return { serialNumber: candidate, status: "invalid" };
       }
     }
   }
 
-  // Ningún candidato cayó en rango inválido — mostrar el número central de 8 dígitos
-  const center = Math.max(0, Math.floor((digits.length - 8) / 2));
-  const serialStr = digits.substring(center, center + Math.min(8, digits.length));
-  return { serialNumber: serialStr, status: serialStr.length >= 7 ? "valid" : "unclear" };
+  return { serialNumber: best.slice(-8), status: "valid" };
 }
