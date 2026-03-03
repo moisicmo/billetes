@@ -29,8 +29,8 @@ async function createTesseractWorker(): Promise<TWorker> {
     corePath: "/tessdata",
   });
   await worker.setParameters({
-    tessedit_char_whitelist: "0123456789B",
-    tessedit_pageseg_mode: "11" as PSM, // SPARSE_TEXT: encuentra texto en cualquier posición
+    tessedit_char_whitelist: "0123456789AB", // A y B para distinguir Serie A vs Serie B
+    tessedit_pageseg_mode: "7" as PSM,       // PSM_SINGLE_LINE: una sola línea de texto
   });
   return worker;
 }
@@ -41,6 +41,13 @@ function getTesseractWorker(): Promise<TWorker> {
     _workerPromise.catch(() => { _workerPromise = null; });
   }
   return _workerPromise;
+}
+
+// Precargar Tesseract en segundo plano al cargar el módulo (iOS/Safari no tiene TextDetector).
+// Así cuando el usuario abre el modal, el worker ya está listo.
+if (typeof window !== "undefined" && !HAS_TEXT_DETECTOR) {
+  // Pequeño delay para no competir con el render inicial de la página
+  setTimeout(() => getTesseractWorker().catch(() => {}), 800);
 }
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -214,11 +221,13 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
             const vw = video.videoWidth;
             const vh = video.videoHeight;
 
-            // Crop amplio: 5%-95% horizontal, 20%-80% vertical
+            // Crop centrado: coincide con la guía visual (w-4/5 centrado, h centrado)
+            // Horizontal: 5%-95% para capturar todo el ancho del número
+            // Vertical: 35%-65% — franja central donde va el número de serie
             const cx = Math.floor(vw * 0.05);
-            const cy = Math.floor(vh * 0.20);
+            const cy = Math.floor(vh * 0.35);
             const cw = Math.floor(vw * 0.90);
-            const ch = Math.floor(vh * 0.60);
+            const ch = Math.floor(vh * 0.30);
 
             canvas.width = cw * 2;
             canvas.height = ch * 2;

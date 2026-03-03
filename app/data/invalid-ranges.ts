@@ -69,13 +69,22 @@ export interface ScanResult {
 
 /** Extrae el número de serie del texto OCR y valida contra los rangos invalidados.
  *
- *  Usa ventana deslizante de 7-10 dígitos para manejar el caso frecuente en que
- *  la letra "B" (Serie B) sea leída como "8" por el OCR:
- *    → "12345678 B" se vuelve "123456788" con el whitelist de solo dígitos
- *    → la ventana de 8 dígitos encuentra "12345678" dentro de "123456788" ✓
+ *  - Si detecta la letra "A" después de los dígitos → Serie A → siempre VÁLIDO
+ *    (el BCB solo invalidó billetes Serie B)
+ *  - Si detecta "B" o no hay letra → Serie B → verificar contra rangos
+ *  - Ventana deslizante 7-10 dígitos para manejar casos en que "B" se lea como "8"
  */
 export function checkSerial(rawText: string, denomination: Denomination): ScanResult {
-  const digits = rawText.replace(/\D/g, "");
+  const upper = rawText.toUpperCase();
+
+  // Detectar Serie A: secuencia de dígitos seguida de " A" o "A" al final
+  const serieAMatch = upper.match(/(\d{7,10})\s*A(?:\s|$)/);
+  if (serieAMatch) {
+    const serial = serieAMatch[1].slice(-8);
+    return { serialNumber: serial, status: "valid" };
+  }
+
+  const digits = upper.replace(/\D/g, "");
   if (digits.length < 7) return { serialNumber: null, status: "unclear" };
 
   const ranges = INVALID_RANGES[denomination];
