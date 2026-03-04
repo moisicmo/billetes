@@ -154,11 +154,23 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
       // Tesseract: iOS Safari, Firefox, Android sin TextDetector funcional
       setEngineReady(false);
       let cancelled = false;
+
+      // Timeout de seguridad: si en 20s el worker no cargó (p.ej. Chrome/Android
+      // rechaza silenciosamente el WASM), mostrar error con botón Reintentar.
+      const loadTimeout = setTimeout(() => {
+        if (!cancelled) {
+          _workerPromise = null; // permite reintentar
+          setEngineError(true);
+        }
+      }, 20_000);
+
       getTesseractWorker()
-        .then(() => { if (!cancelled) setEngineReady(true); })
-        .catch(() => { if (!cancelled) setEngineError(true); });
+        .then(() => { clearTimeout(loadTimeout); if (!cancelled) setEngineReady(true); })
+        .catch(() => { clearTimeout(loadTimeout); if (!cancelled) setEngineError(true); });
+
       return () => {
         cancelled = true;
+        clearTimeout(loadTimeout);
         stopCamera();
       };
     }
