@@ -136,12 +136,22 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
     startCamera();
 
+    // TextDetector existe en algunos Android Chrome pero lanza excepción en dispositivos
+    // sin el servicio ML de Google Play actualizado. Siempre envolver en try/catch.
+    let usedTextDetector = false;
     if (HAS_TEXT_DETECTOR) {
-      // TextDetector nativo: listo al instante, sin internet
-      detectorRef.current = new TextDetector();
-      setEngineReady(true);
-    } else {
-      // Cargar Tesseract solo si no hay TextDetector
+      try {
+        detectorRef.current = new TextDetector();
+        setEngineReady(true);
+        usedTextDetector = true;
+      } catch {
+        // TextDetector no funciona en este dispositivo → caer a Tesseract
+        detectorRef.current = null;
+      }
+    }
+
+    if (!usedTextDetector) {
+      // Tesseract: iOS Safari, Firefox, Android sin TextDetector funcional
       setEngineReady(false);
       let cancelled = false;
       getTesseractWorker()
