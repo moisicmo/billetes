@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "copy-tessdata": "node -e \"const fs=require('fs'),src='node_modules/tesseract.js-core',dst='public/tessdata';fs.mkdirSync(dst,{recursive:true});fs.readdirSync(dst).filter(f=>f.endsWith('.wasm')||f.endsWith('.wasm.js')).forEach(f=>fs.unlinkSync(dst+'/'+f));fs.readdirSync(src).filter(f=>(f.endsWith('.wasm')||f.endsWith('.wasm.js'))&&!f.includes('simd')).forEach(f=>fs.copyFileSync(src+'/'+f,dst+'/'+f));fs.copyFileSync('node_modules/tesseract.js/dist/worker.min.js',dst+'/worker.min.js');console.log('tessdata OK')\"",
+    "copy-tessdata": "node -e \"const fs=require('fs'),src='node_modules/tesseract.js-core',dst='public/tessdata';fs.mkdirSync(dst,{recursive:true});fs.readdirSync(dst).filter(f=>f.endsWith('.wasm')||f.endsWith('.wasm.js')).forEach(f=>fs.unlinkSync(dst+'/'+f));fs.readdirSync(src).filter(f=>f.endsWith('.wasm')||f.endsWith('.wasm.js')).forEach(f=>fs.copyFileSync(src+'/'+f,dst+'/'+f));fs.copyFileSync('node_modules/tesseract.js/dist/worker.min.js',dst+'/worker.min.js');console.log('tessdata OK')\"",
     "build": "npm run copy-tessdata && react-router build",
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
