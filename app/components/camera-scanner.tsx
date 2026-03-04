@@ -90,6 +90,8 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
     status: "scanning",
   });
   const [bbox, setBbox] = useState<BoundingBox | null>(null);
+  const [manualMode, setManualMode] = useState(false);
+  const [manualSerial, setManualSerial] = useState("");
 
   const stopCamera = useCallback(() => {
     scanActiveRef.current = false;
@@ -137,6 +139,8 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
     setEngineError(false);
     setScanResult({ serialNumber: null, status: "scanning" });
     setBbox(null);
+    setManualMode(false);
+    setManualSerial("");
 
     startCamera();
 
@@ -390,23 +394,32 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
           )}
 
           {/* Error de carga */}
-          {engineError && (
+          {engineError && !manualMode && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/75">
               <div className="flex flex-col items-center gap-4 px-6 text-center">
                 <span className="text-3xl">⚠️</span>
                 <p className="text-sm font-medium text-white">No se pudo cargar el motor OCR.</p>
-                <button
-                  onClick={() => {
-                    setEngineError(false);
-                    setEngineReady(false);
-                    getTesseractWorker()
-                      .then(() => setEngineReady(true))
-                      .catch(() => setEngineError(true));
-                  }}
-                  className="rounded-xl bg-white px-6 py-2.5 text-sm font-semibold text-gray-900 transition-opacity hover:opacity-90 active:scale-95"
-                >
-                  Reintentar
-                </button>
+                <div className="flex flex-col gap-2 w-full">
+                  <button
+                    onClick={() => {
+                      setEngineError(false);
+                      setEngineReady(false);
+                      _workerPromise = null;
+                      getTesseractWorker()
+                        .then(() => setEngineReady(true))
+                        .catch(() => setEngineError(true));
+                    }}
+                    className="rounded-xl bg-white px-6 py-2.5 text-sm font-semibold text-gray-900 transition-opacity hover:opacity-90 active:scale-95"
+                  >
+                    Reintentar
+                  </button>
+                  <button
+                    onClick={() => setManualMode(true)}
+                    className="rounded-xl bg-white/20 px-6 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 active:scale-95"
+                  >
+                    Ingresar manualmente
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -421,62 +434,142 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
             <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">
               {cameraError}
             </div>
+          ) : manualMode ? (
+            <ManualInput
+              denomination={denomination}
+              value={manualSerial}
+              onChange={setManualSerial}
+              onSwitchToCamera={() => { setManualMode(false); setManualSerial(""); }}
+            />
           ) : (
-            <div
-              className={cn(
-                "rounded-xl border-2 px-5 py-4 transition-all duration-300",
-                status === "valid"   && "border-green-400 bg-green-50 dark:border-green-600 dark:bg-green-900/20",
-                status === "invalid" && "border-red-400 bg-red-50 dark:border-red-600 dark:bg-red-900/20",
-                (status === "scanning" || status === "unclear") &&
-                  "border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40"
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
-                    Número leído
-                  </p>
-                  <p
-                    className={cn(
-                      "mt-1 font-mono text-3xl font-bold tracking-wider",
-                      status === "valid"   && "text-green-700 dark:text-green-300",
-                      status === "invalid" && "text-red-700 dark:text-red-300",
-                      status === "scanning" && "animate-pulse text-gray-300 dark:text-gray-600",
-                      status === "unclear" && "text-gray-400 dark:text-gray-500"
-                    )}
-                  >
-                    {serialNumber ?? (status === "scanning" ? "········" : "- - - -")}
-                  </p>
-                </div>
-
-                <div className="text-5xl leading-none select-none">
-                  {status === "valid"   && "✅"}
-                  {status === "invalid" && "⛔"}
-                  {status === "scanning" && (
-                    <div className="h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-gray-500" />
-                  )}
-                  {status === "unclear" && "❓"}
-                </div>
-              </div>
-
-              <p
+            <>
+              <div
                 className={cn(
-                  "mt-3 text-sm font-semibold",
-                  status === "valid"   && "text-green-700 dark:text-green-400",
-                  status === "invalid" && "text-red-700 dark:text-red-400",
-                  (status === "scanning" || status === "unclear") && "text-gray-400 dark:text-gray-500"
+                  "rounded-xl border-2 px-5 py-4 transition-all duration-300",
+                  status === "valid"   && "border-green-400 bg-green-50 dark:border-green-600 dark:bg-green-900/20",
+                  status === "invalid" && "border-red-400 bg-red-50 dark:border-red-600 dark:bg-red-900/20",
+                  (status === "scanning" || status === "unclear") &&
+                    "border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40"
                 )}
               >
-                {status === "valid"   && "✓ Billete VÁLIDO — No está en los rangos invalidados"}
-                {status === "invalid" && "⚠ ¡CUIDADO! Este billete está en los rangos INVALIDADOS por el BCB"}
-                {status === "scanning" && "Buscando número de serie…"}
-                {status === "unclear" && "No se pudo leer. Ajustá el número de serie frente a la cámara."}
-              </p>
-            </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                      Número leído
+                    </p>
+                    <p
+                      className={cn(
+                        "mt-1 font-mono text-3xl font-bold tracking-wider",
+                        status === "valid"   && "text-green-700 dark:text-green-300",
+                        status === "invalid" && "text-red-700 dark:text-red-300",
+                        status === "scanning" && "animate-pulse text-gray-300 dark:text-gray-600",
+                        status === "unclear" && "text-gray-400 dark:text-gray-500"
+                      )}
+                    >
+                      {serialNumber ?? (status === "scanning" ? "········" : "- - - -")}
+                    </p>
+                  </div>
+
+                  <div className="text-5xl leading-none select-none">
+                    {status === "valid"   && "✅"}
+                    {status === "invalid" && "⛔"}
+                    {status === "scanning" && (
+                      <div className="h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-gray-500" />
+                    )}
+                    {status === "unclear" && "❓"}
+                  </div>
+                </div>
+
+                <p
+                  className={cn(
+                    "mt-3 text-sm font-semibold",
+                    status === "valid"   && "text-green-700 dark:text-green-400",
+                    status === "invalid" && "text-red-700 dark:text-red-400",
+                    (status === "scanning" || status === "unclear") && "text-gray-400 dark:text-gray-500"
+                  )}
+                >
+                  {status === "valid"   && "✓ Billete VÁLIDO — No está en los rangos invalidados"}
+                  {status === "invalid" && "⚠ ¡CUIDADO! Este billete está en los rangos INVALIDADOS por el BCB"}
+                  {status === "scanning" && "Buscando número de serie…"}
+                  {status === "unclear" && "No se pudo leer. Ajustá el número de serie frente a la cámara."}
+                </p>
+              </div>
+
+              <button
+                onClick={() => setManualMode(true)}
+                className="mt-2 w-full text-center text-xs text-gray-400 underline underline-offset-2 hover:text-gray-600 dark:text-gray-600 dark:hover:text-gray-400"
+              >
+                Ingresar número manualmente
+              </button>
+            </>
           )}
         </div>
 
       </div>
+    </div>
+  );
+}
+
+// ─── Entrada manual ──────────────────────────────────────────────────────────
+interface ManualInputProps {
+  denomination: Denomination;
+  value: string;
+  onChange: (v: string) => void;
+  onSwitchToCamera: () => void;
+}
+
+function ManualInput({ denomination, value, onChange, onSwitchToCamera }: ManualInputProps) {
+  const result: ScanResult | null =
+    value.trim().length >= 8 ? checkSerial(value.trim(), denomination) : null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <label className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
+          Número de serie
+        </label>
+        <input
+          type="text"
+          inputMode="text"
+          autoFocus
+          placeholder="Ej: 008708189 B"
+          value={value}
+          onChange={(e) => onChange(e.target.value.toUpperCase())}
+          maxLength={13}
+          className="mt-1.5 w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 font-mono text-2xl font-bold tracking-widest text-gray-900 outline-none focus:border-blue-400 dark:border-gray-700 dark:bg-gray-800 dark:text-white dark:focus:border-blue-500"
+        />
+      </div>
+
+      {result && (
+        <div
+          className={cn(
+            "rounded-xl border-2 px-4 py-3",
+            result.status === "valid"   && "border-green-400 bg-green-50 dark:border-green-600 dark:bg-green-900/20",
+            result.status === "invalid" && "border-red-400 bg-red-50 dark:border-red-600 dark:bg-red-900/20",
+            result.status === "unclear" && "border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40",
+          )}
+        >
+          <p
+            className={cn(
+              "text-sm font-semibold",
+              result.status === "valid"   && "text-green-700 dark:text-green-400",
+              result.status === "invalid" && "text-red-700 dark:text-red-400",
+              result.status === "unclear" && "text-gray-400 dark:text-gray-500",
+            )}
+          >
+            {result.status === "valid"   && "✓ Billete VÁLIDO — No está en los rangos invalidados"}
+            {result.status === "invalid" && "⚠ ¡CUIDADO! Este billete está en los rangos INVALIDADOS por el BCB"}
+            {result.status === "unclear" && "Formato no reconocido. Ingresá los 9 dígitos y la letra (A o B)."}
+          </p>
+        </div>
+      )}
+
+      <button
+        onClick={onSwitchToCamera}
+        className="text-center text-xs text-gray-400 underline underline-offset-2 hover:text-gray-600 dark:text-gray-600 dark:hover:text-gray-400"
+      >
+        Usar cámara
+      </button>
     </div>
   );
 }
