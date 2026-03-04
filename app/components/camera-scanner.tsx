@@ -26,11 +26,15 @@ async function createTesseractWorker(): Promise<TWorker> {
   const worker = await createWorker("eng", 1, {
     workerPath: "/tessdata/worker.min.js",
     langPath: "/tessdata",
-    corePath: "/tessdata",
+    // Apuntar al WASM básico directamente en vez del directorio.
+    // Si se pasa un directorio, el worker detecta SIMD y carga
+    // tesseract-core-simd-lstm.wasm, que falla silenciosamente en muchos
+    // Android Chrome (no rechaza la promesa — simplemente cuelga).
+    corePath: "/tessdata/tesseract-core.wasm",
   });
   await worker.setParameters({
-    tessedit_char_whitelist: "0123456789AB", // A y B para distinguir Serie A vs Serie B
-    tessedit_pageseg_mode: "11" as PSM,      // PSM_SPARSE_TEXT: encuentra texto en cualquier posición del frame
+    tessedit_char_whitelist: "0123456789AB",
+    tessedit_pageseg_mode: "11" as PSM,
   });
   return worker;
 }
@@ -43,11 +47,11 @@ function getTesseractWorker(): Promise<TWorker> {
   return _workerPromise;
 }
 
-// Precargar Tesseract en segundo plano al cargar el módulo (iOS/Safari no tiene TextDetector).
-// Así cuando el usuario abre el modal, el worker ya está listo.
-if (typeof window !== "undefined" && !HAS_TEXT_DETECTOR) {
-  // Pequeño delay para no competir con el render inicial de la página
-  setTimeout(() => getTesseractWorker().catch(() => {}), 800);
+// Precargar Tesseract en TODOS los dispositivos, no solo cuando no hay TextDetector.
+// En Android, TextDetector puede existir en window pero fallar en runtime,
+// haciendo que el fallback a Tesseract empiece desde cero al abrir el modal.
+if (typeof window !== "undefined") {
+  setTimeout(() => getTesseractWorker().catch(() => {}), 1000);
 }
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
