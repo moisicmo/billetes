@@ -30,7 +30,7 @@ async function createTesseractWorker(): Promise<TWorker> {
     // Si se pasa un directorio, el worker detecta SIMD y carga
     // tesseract-core-simd-lstm.wasm, que falla silenciosamente en muchos
     // Android Chrome (no rechaza la promesa — simplemente cuelga).
-    corePath: "/tessdata/tesseract-core.wasm",
+    corePath: "/tessdata",
   });
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789AB",
