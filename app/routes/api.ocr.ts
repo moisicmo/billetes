@@ -25,7 +25,7 @@ async function getWorker(): Promise<TWorker> {
     const w = await createWorker("eng", 1, localLangPath ? { langPath: localLangPath } : {});
     await w.setParameters({
       tessedit_char_whitelist: "0123456789AB",
-      tessedit_pageseg_mode: "7" as PSM,  // single text line — más preciso cuando la imagen está bien recortada
+      tessedit_pageseg_mode: "11" as PSM, // sparse text — más tolerante
     });
     return w;
   })();
@@ -35,31 +35,20 @@ async function getWorker(): Promise<TWorker> {
 }
 
 /**
- * Preprocesa la imagen para OCR:
- * - Escala de grises
- * - Normaliza el histograma (estira el rango de contraste)
- * - Sharpening de bordes
- * - Umbral adaptativo (binarización) → texto negro puro sobre fondo blanco
- * - Escala a altura fija para Tesseract
+ * Preprocesa la imagen antes de pasarla a Tesseract:
+ * - Grises + normalización de histograma (mejora contraste)
+ * - Sharpening (bordes del texto más nítidos)
+ * - Escala x3 para texto más grande → mejor OCR
+ * NO se aplica umbral aquí — Tesseract hace su propio binarizado internamente.
  */
 async function preprocessForOCR(inputBuffer: Buffer): Promise<Buffer> {
-  // Paso 1: grises, normalizar, enfocar
-  const normalized = await sharp(inputBuffer)
+  const { width = 800, height = 200 } = await sharp(inputBuffer).metadata();
+
+  return sharp(inputBuffer)
     .grayscale()
-    .normalize()          // estira el histograma al rango completo
-    .sharpen(2, 1, 2)     // enfoca bordes del texto
-    .toBuffer();
-
-  // Paso 2: obtener metadatos para ajustar escala
-  const meta = await sharp(normalized).metadata();
-  const targetH = 80; // altura fija — Tesseract funciona mejor con texto grande y uniforme
-  const scale = meta.height ? targetH / meta.height : 1;
-  const newW = Math.round((meta.width ?? 800) * scale);
-
-  // Paso 3: escalar + umbral → blanco/negro limpio
-  return sharp(normalized)
-    .resize(newW, targetH, { kernel: "lanczos3" })
-    .threshold(0)  // Otsu automático (sharp calcula el umbral óptimo cuando es 0)
+    .normalize()                      // estira histograma al rango completo
+    .sharpen({ sigma: 1.5 })          // bordes más nítidos
+    .resize(width * 3, height * 3, { kernel: "lanczos3" }) // 3x más grande
     .toBuffer();
 }
 
