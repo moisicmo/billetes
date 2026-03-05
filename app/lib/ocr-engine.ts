@@ -29,7 +29,8 @@ export function initOCR(onProgress?: (p: OcrLoadProgress) => void): Promise<void
       workerPath: "/tessdata/worker.min.js",
       corePath: "/tessdata/",
       langPath: "/tessdata/",
-      cacheMethod: "write", // cachea en IndexedDB
+      cacheMethod: "write",   // cachea traineddata en IndexedDB
+      workerBlobURL: false,   // iOS Safari: evitar restricciones de Blob workers
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       logger: (m: any) => {
         if (typeof m.progress === "number") {
