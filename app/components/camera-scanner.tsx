@@ -15,43 +15,21 @@ declare global {
 const HAS_TEXT_DETECTOR =
   typeof window !== "undefined" && "TextDetector" in window;
 
-// ─── Tesseract fallback (solo si TextDetector no disponible) ─────────────────
-import type { PSM } from "tesseract.js";
-type TWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
-
-let _workerPromise: Promise<TWorker> | null = null;
-
-async function createTesseractWorker(): Promise<TWorker> {
-  const { createWorker } = await import("tesseract.js");
-  const worker = await createWorker("eng", 1, {
-    workerPath: "/tessdata/worker.min.js",
-    langPath: "/tessdata",
-    // Apuntar al WASM básico directamente en vez del directorio.
-    // Si se pasa un directorio, el worker detecta SIMD y carga
-    // tesseract-core-simd-lstm.wasm, que falla silenciosamente en muchos
-    // Android Chrome (no rechaza la promesa — simplemente cuelga).
-    corePath: "/tessdata",
-  });
-  await worker.setParameters({
-    tessedit_char_whitelist: "0123456789AB",
-    tessedit_pageseg_mode: "11" as PSM,
-  });
-  return worker;
-}
-
-function getTesseractWorker(): Promise<TWorker> {
-  if (!_workerPromise) {
-    _workerPromise = createTesseractWorker();
-    _workerPromise.catch(() => { _workerPromise = null; });
+// ─── OCR vía servidor — funciona en iOS, Android, todos los navegadores ────────
+async function serverOCR(canvas: HTMLCanvasElement): Promise<string> {
+  try {
+    const image = canvas.toDataURL("image/jpeg", 0.75);
+    const res = await fetch("/api/ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image }),
+    });
+    if (!res.ok) return "";
+    const { text } = (await res.json()) as { text: string };
+    return text ?? "";
+  } catch {
+    return "";
   }
-  return _workerPromise;
-}
-
-// Precargar Tesseract en TODOS los dispositivos, no solo cuando no hay TextDetector.
-// En Android, TextDetector puede existir en window pero fallar en runtime,
-// haciendo que el fallback a Tesseract empiece desde cero al abrir el modal.
-if (typeof window !== "undefined") {
-  setTimeout(() => getTesseractWorker().catch(() => {}), 1000);
 }
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -83,7 +61,6 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
   const [cameraReady, setCameraReady] = useState(false);
   const [engineReady, setEngineReady] = useState(false);
-  const [engineError, setEngineError] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [scanResult, setScanResult] = useState<ScanResult>({
     serialNumber: null,
@@ -118,7 +95,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
           await track.applyConstraints({
             advanced: [{ focusMode: "continuous" } as MediaTrackConstraintSet],
           });
-        } catch { /* focusMode no soportado — continuar */ }
+        } catch { /* focusMode no soportado */ }
       }
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
@@ -136,7 +113,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
     scanActiveRef.current = false;
     setCameraError("");
-    setEngineError(false);
+    setEngineReady(false);
     setScanResult({ serialNumber: null, status: "scanning" });
     setBbox(null);
     setManualMode(false);
@@ -144,8 +121,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
     startCamera();
 
-    // TextDetector existe en algunos Android Chrome pero lanza excepción en dispositivos
-    // sin el servicio ML de Google Play actualizado. Siempre envolver en try/catch.
+    // Intentar TextDetector nativo primero (Android Chrome)
     let usedTextDetector = false;
     if (HAS_TEXT_DETECTOR) {
       try {
@@ -153,34 +129,14 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
         setEngineReady(true);
         usedTextDetector = true;
       } catch {
-        // TextDetector no funciona en este dispositivo → caer a Tesseract
         detectorRef.current = null;
       }
     }
 
     if (!usedTextDetector) {
-      // Tesseract: iOS Safari, Firefox, Android sin TextDetector funcional
-      setEngineReady(false);
-      let cancelled = false;
-
-      // Timeout de seguridad: si en 20s el worker no cargó (p.ej. Chrome/Android
-      // rechaza silenciosamente el WASM), mostrar error con botón Reintentar.
-      const loadTimeout = setTimeout(() => {
-        if (!cancelled) {
-          _workerPromise = null; // permite reintentar
-          setEngineError(true);
-        }
-      }, 20_000);
-
-      getTesseractWorker()
-        .then(() => { clearTimeout(loadTimeout); if (!cancelled) setEngineReady(true); })
-        .catch(() => { clearTimeout(loadTimeout); if (!cancelled) setEngineError(true); });
-
-      return () => {
-        cancelled = true;
-        clearTimeout(loadTimeout);
-        stopCamera();
-      };
+      // Fallback: OCR vía servidor — siempre disponible
+      detectorRef.current = null;
+      setEngineReady(true); // el servidor no requiere carga local
     }
 
     return () => { stopCamera(); };
@@ -204,22 +160,19 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
           if (detectorRef.current) {
             // ── TextDetector nativo ─────────────────────────────────────
             const texts = await detectorRef.current.detect(video);
-
             if (!scanActiveRef.current) break;
 
-            let found = false;
-            // Ordenar por tamaño de bounding box (más grande primero — más relevante)
             const sorted = [...texts].sort(
               (a, b) => b.boundingBox.width * b.boundingBox.height - a.boundingBox.width * a.boundingBox.height
             );
 
+            let found = false;
             for (const detected of sorted) {
               const result = checkSerial(detected.rawValue, denomination);
               if (result.serialNumber) {
                 const vw = video.videoWidth;
                 const vh = video.videoHeight;
                 const box = detected.boundingBox;
-                // Padding visual para que el cuadro sea más visible
                 const pad = 0.01;
                 setBbox({
                   left: `${Math.max(0, (box.x / vw) - pad) * 100}%`,
@@ -236,24 +189,19 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
             if (!found) {
               setBbox(null);
               setScanResult((prev) =>
-                prev.status === "scanning"
-                  ? prev
-                  : { serialNumber: null, status: "scanning" }
+                prev.status === "scanning" ? prev : { serialNumber: null, status: "scanning" }
               );
             }
 
             await pause(400);
 
           } else {
-            // ── Tesseract fallback ──────────────────────────────────────
+            // ── OCR servidor ────────────────────────────────────────────
             const canvas = canvasRef.current;
             if (!canvas) break;
+
             const vw = video.videoWidth;
             const vh = video.videoHeight;
-
-            // Crop centrado: coincide con la guía visual (w-4/5 centrado, h centrado)
-            // Horizontal: 5%-95% para capturar todo el ancho del número
-            // Vertical: 35%-65% — franja central donde va el número de serie
             const cx = Math.floor(vw * 0.05);
             const cy = Math.floor(vh * 0.35);
             const cw = Math.floor(vw * 0.90);
@@ -266,7 +214,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
             ctx.drawImage(video, cx, cy, cw, ch, 0, 0, canvas.width, canvas.height);
 
-            // Escala de grises simple
+            // Escala de grises
             const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const d = img.data;
             for (let i = 0; i < d.length; i += 4) {
@@ -275,38 +223,31 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
             }
             ctx.putImageData(img, 0, 0);
 
-            const worker = await getTesseractWorker();
-            const { data: { text } } = await worker.recognize(canvas);
+            const text = await serverOCR(canvas);
             if (scanActiveRef.current) {
               setScanResult(checkSerial(text, denomination));
             }
 
-            await pause(1200);
+            await pause(1500);
           }
         } catch {
-          // ignorar errores de frame individual
           await pause(500);
         }
       }
     };
 
     runLoop();
-
     return () => { scanActiveRef.current = false; };
   }, [cameraReady, engineReady, isOpen, denomination]);
 
   if (!isOpen) return null;
 
   const { serialNumber, status } = scanResult;
-  const isLoading = !cameraReady || (!engineReady && !engineError);
+  const isLoading = !cameraReady || !engineReady;
 
-  const engineLabel = HAS_TEXT_DETECTOR
+  const engineLabel = HAS_TEXT_DETECTOR && detectorRef.current
     ? "Motor nativo del dispositivo"
-    : "Motor Tesseract (local)";
-
-  const loadingLabel = !cameraReady
-    ? "Iniciando cámara…"
-    : "Cargando motor OCR local…";
+    : "OCR servidor";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
@@ -344,23 +285,18 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
             className="h-full w-full object-cover"
           />
 
-          {/* Cuadro dinámico sobre el texto detectado */}
+          {/* Bounding box sobre texto detectado (TextDetector) */}
           {bbox && (
             <div
               className={cn(
                 "pointer-events-none absolute rounded border-2 transition-all duration-150",
                 status === "invalid" ? "border-red-400 bg-red-400/10" : "border-green-400 bg-green-400/10"
               )}
-              style={{
-                left: bbox.left,
-                top: bbox.top,
-                width: bbox.width,
-                height: bbox.height,
-              }}
+              style={{ left: bbox.left, top: bbox.top, width: bbox.width, height: bbox.height }}
             />
           )}
 
-          {/* Guía estática cuando no hay detección */}
+          {/* Guía estática */}
           {!bbox && (
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1">
               <p className="text-[10px] font-semibold uppercase tracking-widest text-white/60">
@@ -370,62 +306,31 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
             </div>
           )}
 
-          {/* Badge motor + LIVE */}
+          {/* LIVE badge */}
           {cameraReady && engineReady && (
-            <div className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1">
-              <div className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-              <span className="text-xs font-medium text-white">LIVE</span>
-            </div>
-          )}
-          {cameraReady && engineReady && (
-            <div className="absolute bottom-2 left-2 rounded-full bg-black/60 px-3 py-1">
-              <span className="text-[10px] text-white/70">{engineLabel}</span>
-            </div>
+            <>
+              <div className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1">
+                <div className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                <span className="text-xs font-medium text-white">LIVE</span>
+              </div>
+              <div className="absolute bottom-2 left-2 rounded-full bg-black/60 px-3 py-1">
+                <span className="text-[10px] text-white/70">{engineLabel}</span>
+              </div>
+            </>
           )}
 
           {/* Pantalla de carga */}
-          {isLoading && !cameraError && !engineError && (
+          {isLoading && !cameraError && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/65">
               <div className="flex flex-col items-center gap-3 px-6 text-center">
                 <div className="h-9 w-9 animate-spin rounded-full border-4 border-white/30 border-t-white" />
-                <span className="text-sm text-white">{loadingLabel}</span>
-              </div>
-            </div>
-          )}
-
-          {/* Error de carga */}
-          {engineError && !manualMode && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/75">
-              <div className="flex flex-col items-center gap-4 px-6 text-center">
-                <span className="text-3xl">⚠️</span>
-                <p className="text-sm font-medium text-white">No se pudo cargar el motor OCR.</p>
-                <div className="flex flex-col gap-2 w-full">
-                  <button
-                    onClick={() => {
-                      setEngineError(false);
-                      setEngineReady(false);
-                      _workerPromise = null;
-                      getTesseractWorker()
-                        .then(() => setEngineReady(true))
-                        .catch(() => setEngineError(true));
-                    }}
-                    className="rounded-xl bg-white px-6 py-2.5 text-sm font-semibold text-gray-900 transition-opacity hover:opacity-90 active:scale-95"
-                  >
-                    Reintentar
-                  </button>
-                  <button
-                    onClick={() => setManualMode(true)}
-                    className="rounded-xl bg-white/20 px-6 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 active:scale-95"
-                  >
-                    Ingresar manualmente
-                  </button>
-                </div>
+                <span className="text-sm text-white">Iniciando cámara…</span>
               </div>
             </div>
           )}
         </div>
 
-        {/* Canvas oculto para Tesseract */}
+        {/* Canvas oculto */}
         <canvas ref={canvasRef} className="hidden" />
 
         {/* Panel resultado */}
