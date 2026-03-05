@@ -16,6 +16,12 @@ const HAS_TEXT_DETECTOR =
   typeof window !== "undefined" && "TextDetector" in window;
 
 // ─── OCR vía servidor — funciona en iOS, Android, todos los navegadores ────────
+
+/** Precalienta el worker de Tesseract en el servidor (GET /api/ocr) */
+function warmupServerOCR() {
+  fetch("/api/ocr").catch(() => {});
+}
+
 async function serverOCR(canvas: HTMLCanvasElement): Promise<string> {
   try {
     const image = canvas.toDataURL("image/jpeg", 0.75);
@@ -136,7 +142,9 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
     if (!usedTextDetector) {
       // Fallback: OCR vía servidor — siempre disponible
       detectorRef.current = null;
-      setEngineReady(true); // el servidor no requiere carga local
+      setEngineReady(true);
+      // Precalentar el worker de Tesseract en el servidor mientras la cámara inicia
+      warmupServerOCR();
     }
 
     return () => { stopCamera(); };
