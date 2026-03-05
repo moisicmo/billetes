@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { checkSerial, type Denomination, type ScanResult } from "@/data/invalid-ranges";
+import { initOCR, runOCR, type OcrLoadProgress } from "@/lib/ocr-engine";
 
 // ─── TextDetector nativo (Android Chrome / Edge) — sin internet, sin descargas ──
 declare global {
@@ -14,29 +15,6 @@ declare global {
 
 const HAS_TEXT_DETECTOR =
   typeof window !== "undefined" && "TextDetector" in window;
-
-// ─── OCR vía servidor — funciona en iOS, Android, todos los navegadores ────────
-
-/** Precalienta el worker de Tesseract en el servidor (GET /api/ocr) */
-function warmupServerOCR() {
-  fetch("/api/ocr").catch(() => {});
-}
-
-async function serverOCR(canvas: HTMLCanvasElement): Promise<string> {
-  try {
-    const image = canvas.toDataURL("image/jpeg", 0.75);
-    const res = await fetch("/api/ocr", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image }),
-    });
-    if (!res.ok) return "";
-    const { text } = (await res.json()) as { text: string };
-    return text ?? "";
-  } catch {
-    return "";
-  }
-}
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 interface CameraScannerProps {
@@ -67,6 +45,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
   const [cameraReady, setCameraReady] = useState(false);
   const [engineReady, setEngineReady] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState<number | null>(null);
   const [cameraError, setCameraError] = useState("");
   const [scanResult, setScanResult] = useState<ScanResult>({
     serialNumber: null,
@@ -124,6 +103,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
     setBbox(null);
     setManualMode(false);
     setManualSerial("");
+    setOcrProgress(null);
 
     startCamera();
 
@@ -140,11 +120,30 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
     }
 
     if (!usedTextDetector) {
-      // Fallback: OCR vía servidor — siempre disponible
+      // Fallback: ONNX/Transformers — corre en el browser (iOS, Android, escritorio)
       detectorRef.current = null;
-      setEngineReady(true);
-      // Precalentar el worker de Tesseract en el servidor mientras la cámara inicia
-      warmupServerOCR();
+      let active = true;
+      setOcrProgress(0);
+
+      initOCR((p: OcrLoadProgress) => {
+        if (active) setOcrProgress(p.progress);
+      }).then(() => {
+        if (active) {
+          setEngineReady(true);
+          setOcrProgress(null);
+        }
+      }).catch(() => {
+        if (active) {
+          // Si falla la carga del modelo, dejar pasar igual (quedará en manual)
+          setEngineReady(true);
+          setOcrProgress(null);
+        }
+      });
+
+      return () => {
+        active = false;
+        stopCamera();
+      };
     }
 
     return () => { stopCamera(); };
@@ -204,7 +203,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
             await pause(400);
 
           } else {
-            // ── OCR servidor ────────────────────────────────────────────
+            // ── ONNX / Transformers OCR ─────────────────────────────────
             const canvas = canvasRef.current;
             if (!canvas) break;
 
@@ -222,14 +221,12 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
             ctx.drawImage(video, cx, cy, cw, ch, 0, 0, canvas.width, canvas.height);
 
-            // El servidor aplica preprocesamiento (normalización + sharpening).
-            // No binarizar aquí: JPEG sobre imagen B/N crea artefactos que rompen el OCR.
-            const text = await serverOCR(canvas);
+            const text = await runOCR(canvas);
             if (scanActiveRef.current) {
               setScanResult(checkSerial(text, denomination));
             }
 
-            await pause(1500);
+            await pause(1200);
           }
         } catch {
           await pause(500);
@@ -248,7 +245,10 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
   const engineLabel = HAS_TEXT_DETECTOR && detectorRef.current
     ? "Motor nativo del dispositivo"
-    : "OCR servidor";
+    : "ONNX / Transformers";
+
+  // Mostrar barra de progreso cuando cámara lista pero modelo cargando
+  const showOcrProgress = ocrProgress != null && cameraReady && !engineReady;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
@@ -324,8 +324,33 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
           {isLoading && !cameraError && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/65">
               <div className="flex flex-col items-center gap-3 px-6 text-center">
-                <div className="h-9 w-9 animate-spin rounded-full border-4 border-white/30 border-t-white" />
-                <span className="text-sm text-white">Iniciando cámara…</span>
+                {showOcrProgress ? (
+                  // Cámara lista, modelo descargando
+                  <>
+                    <div className="w-52">
+                      <div className="mb-1 flex justify-between text-xs text-white/70">
+                        <span>Motor OCR</span>
+                        <span>{ocrProgress}%</span>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-white/20">
+                        <div
+                          className="h-full rounded-full bg-white transition-all duration-500"
+                          style={{ width: `${ocrProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="text-sm text-white">Cargando motor OCR…</span>
+                    <span className="text-[11px] text-white/50">Solo la primera vez (~77 MB)</span>
+                  </>
+                ) : (
+                  // Cámara cargando
+                  <>
+                    <div className="h-9 w-9 animate-spin rounded-full border-4 border-white/30 border-t-white" />
+                    <span className="text-sm text-white">
+                      {!cameraReady ? "Iniciando cámara…" : "Cargando motor OCR…"}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           )}
