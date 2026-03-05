@@ -203,16 +203,17 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
             await pause(400);
 
           } else {
-            // ── ONNX / Transformers OCR ─────────────────────────────────
+            // ── Tesseract OCR ────────────────────────────────────────────
             const canvas = canvasRef.current;
             if (!canvas) break;
 
             const vw = video.videoWidth;
             const vh = video.videoHeight;
-            const cx = Math.floor(vw * 0.05);
-            const cy = Math.floor(vh * 0.35);
-            const cw = Math.floor(vw * 0.90);
-            const ch = Math.floor(vh * 0.30);
+            // Crop horizontal amplio, vertical cubre el tercio central del billete
+            const cx = Math.floor(vw * 0.03);
+            const cy = Math.floor(vh * 0.25);
+            const cw = Math.floor(vw * 0.94);
+            const ch = Math.floor(vh * 0.50);
 
             canvas.width = cw * 2;
             canvas.height = ch * 2;
@@ -226,7 +227,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
               setScanResult(checkSerial(text, denomination));
             }
 
-            await pause(1200);
+            await pause(800);
           }
         } catch {
           await pause(500);
@@ -245,7 +246,7 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
   const engineLabel = HAS_TEXT_DETECTOR && detectorRef.current
     ? "Motor nativo del dispositivo"
-    : "ONNX / Transformers";
+    : "Tesseract OCR";
 
   // Mostrar barra de progreso cuando cámara lista pero modelo cargando
   const showOcrProgress = ocrProgress != null && cameraReady && !engineReady;
