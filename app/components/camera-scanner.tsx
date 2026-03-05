@@ -214,14 +214,11 @@ export function CameraScanner({ isOpen, onClose, denomination }: CameraScannerPr
 
             ctx.drawImage(video, cx, cy, cw, ch, 0, 0, canvas.width, canvas.height);
 
-            // Escala de grises
-            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const d = img.data;
-            for (let i = 0; i < d.length; i += 4) {
-              const g = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
-              d[i] = d[i + 1] = d[i + 2] = g;
-            }
-            ctx.putImageData(img, 0, 0);
+            // Preprocesamiento para OCR:
+            // 1) Escala de grises
+            // 2) Realce de contraste (CLAHE simplificado)
+            // 3) Binarización Otsu — texto negro puro sobre blanco
+            preprocessCanvas(ctx, canvas.width, canvas.height);
 
             const text = await serverOCR(canvas);
             if (scanActiveRef.current) {
@@ -477,6 +474,67 @@ function ManualInput({ denomination, value, onChange, onSwitchToCamera }: Manual
       </button>
     </div>
   );
+}
+
+// ─── Preprocesamiento de imagen para OCR ────────────────────────────────────
+/**
+ * Aplica sobre el canvas:
+ * 1. Escala de grises
+ * 2. Normalización de contraste (estira el histograma al rango 0-255)
+ * 3. Binarización Otsu (umbral óptimo automático)
+ * Resultado: texto negro puro sobre fondo blanco → mucho mejor para Tesseract
+ */
+function preprocessCanvas(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  const n = w * h;
+
+  // 1) Escala de grises
+  const gray = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const base = i * 4;
+    gray[i] = Math.round(0.299 * d[base] + 0.587 * d[base + 1] + 0.114 * d[base + 2]);
+  }
+
+  // 2) Normalización: encontrar min/max y estirar al rango 0-255
+  let lo = 255, hi = 0;
+  for (let i = 0; i < n; i++) {
+    if (gray[i] < lo) lo = gray[i];
+    if (gray[i] > hi) hi = gray[i];
+  }
+  const range = hi - lo || 1;
+  for (let i = 0; i < n; i++) {
+    gray[i] = Math.round(((gray[i] - lo) / range) * 255);
+  }
+
+  // 3) Binarización Otsu — calcula el umbral que maximiza la varianza entre clases
+  const hist = new Int32Array(256);
+  for (let i = 0; i < n; i++) hist[gray[i]]++;
+
+  let sumAll = 0;
+  for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+
+  let sumB = 0, wB = 0, maxVar = 0, threshold = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = n - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sumAll - sumB) / wF;
+    const variance = wB * wF * (mB - mF) ** 2;
+    if (variance > maxVar) { maxVar = variance; threshold = t; }
+  }
+
+  // Aplicar umbral al canvas
+  for (let i = 0; i < n; i++) {
+    const v = gray[i] > threshold ? 255 : 0;
+    const base = i * 4;
+    d[base] = d[base + 1] = d[base + 2] = v;
+    d[base + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 function pause(ms: number) {
